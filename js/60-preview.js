@@ -118,11 +118,9 @@
     return p;
   }
   function revokeAll() { urls.forEach((u) => URL.revokeObjectURL(u)); urls = []; }
-  // Aberto direto do arquivo (file://) — e no APK, que quase sempre abre assim
-  // (file:///android_asset, content://…) — o navegador não deixa o preview carregar
-  // endereços blob:. Nesse caso cada arquivo vira um endereço data: e a PÁGINA entra
-  // direto no quadro (srcdoc), que funciona em qualquer lugar.
-  const DATA_MODE = !/^https?:$/.test(location.protocol);
+  // Aberto direto do arquivo (file://), o navegador não deixa a página do preview
+  // carregar endereços blob:. Nesse caso cada arquivo vira um endereço data:.
+  const DATA_MODE = location.protocol === 'file:';
   function mk(content, mime) {
     if (DATA_MODE) {
       const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
@@ -173,9 +171,6 @@
 
   function consoleShim(map, baseDir) {
     return '<script>(function(){var P=parent,M=' + JSON.stringify(map) + ',B=' + JSON.stringify(baseDir) + ';' +
-      // No preview aberto do arquivo (file://) o navegador bloqueia localStorage: damos um "de mentira" na memória
-      'function MS(){var d={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},setItem:function(k,v){d[k]=String(v)},removeItem:function(k){delete d[k]},clear:function(){d={}},key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}}' +
-      '["localStorage","sessionStorage"].forEach(function(n){try{window[n].getItem("x")}catch(e){try{Object.defineProperty(window,n,{value:MS(),configurable:true})}catch(_){}}});' +
       'function S(v){try{if(v instanceof Error)return v.stack||String(v);if(typeof v==="object")return JSON.stringify(v,null,1).slice(0,2000);return String(v)}catch(e){return String(v)}}' +
       '["log","info","warn","error","debug"].forEach(function(l){var o=console[l];console[l]=function(){try{P.postMessage({sk:"console",level:l,text:[].map.call(arguments,S).join(" ")},"*")}catch(e){}o&&o.apply(console,arguments)}});' +
       'addEventListener("error",function(e){P.postMessage({sk:"console",level:"error",text:(e.message||"Erro")+(e.lineno?" (linha "+e.lineno+")":"")},"*")});' +
@@ -248,8 +243,7 @@
     } catch (e) { html = '<pre style="color:#c00;padding:12px">Erro ao montar o preview: ' + SK.esc(e.message) + '</pre>'; }
     errors = 0; showErr();
     lastUrl = mkPage(html);
-    if (DATA_MODE) { frame.removeAttribute('src'); frame.srcdoc = html; }
-    else { frame.removeAttribute('srcdoc'); frame.src = lastUrl; }
+    frame.src = lastUrl;
     SK.$('.pv-title', panel).textContent = target ? 'Preview' : 'Preview';
   }
   const refreshSoon = SK.debounce(() => { if (auto) refresh(); }, 650);

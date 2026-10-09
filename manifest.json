@@ -2,7 +2,7 @@
   "name": "Mini SK",
   "short_name": "Mini SK",
   "description": "Mini SK",
-  "id": "./",
+  "id": "./app-mini-sk",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

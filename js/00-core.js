@@ -72,19 +72,6 @@ window.SK = window.SK || {};
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   };
-  // ── Mandar para o Drive / WhatsApp / e-mail (o "Compartilhar" do celular) ──
-  // Abre a lista do aparelho e você escolhe o Drive. Sem cadastro no Google.
-  // Onde não existe (PC antigo, APK sem ponte): baixa o arquivo.
-  SK.compartilhar = async (name, data, mime) => {
-    const blob = data instanceof Blob ? data : new Blob([data], { type: mime || 'application/octet-stream' });
-    try {
-      const file = new File([blob], name, { type: blob.type || mime || 'application/octet-stream' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return 'compartilhado'; }
-    } catch (e) { if (e && e.name === 'AbortError') return 'cancelado'; }
-    SK.download(name, blob, mime);
-    SK.toast('Este aparelho não abriu o "Compartilhar": o arquivo foi baixado. Mande para o Drive pelo app do Drive (＋ → Enviar).');
-    return 'baixado';
-  };
   SK.copy = async (text) => {
     try { await navigator.clipboard.writeText(text); SK.toast('Copiado'); }
     catch { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); SK.toast('Copiado'); } catch { SK.toast('Não consegui copiar', 'error'); } ta.remove(); }

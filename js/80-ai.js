@@ -24,7 +24,6 @@
     { id: 'xai', label: 'xAI (Grok)', prefix: 'xai-', kind: 'openai', base: 'https://api.x.ai/v1', model: 'grok-3-mini', site: 'https://console.x.ai' },
     { id: 'perplexity', label: 'Perplexity', prefix: 'pplx-', kind: 'openai', base: 'https://api.perplexity.ai', model: 'sonar', site: 'https://www.perplexity.ai/settings/api' },
     { id: 'openai', label: 'OpenAI (GPT)', prefix: 'sk-', kind: 'openai', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', site: 'https://platform.openai.com/api-keys' },
-    { id: 'monica', label: 'Monica (saldo de API, separado da assinatura)', prefix: '', kind: 'openai', base: 'https://openapi.monica.im/v1', model: 'claude-haiku-4-5', site: 'https://platform.monica.im' },
     { id: 'custom', label: 'Outro (compatível com OpenAI)', prefix: '', kind: 'openai', base: '', model: '', site: '' },
   ];
   const detect = (key) => { const k = String(key || '').trim(); return PRESETS.find((p) => [].concat(p.prefix || []).some((x) => x && k.startsWith(x))) || null; };
@@ -40,14 +39,6 @@
 
   const saveKeys = () => { SK.pref.set('aiKeys', keys); SK.pref.set('aiActive', activeKey); };
   const current = () => keys.find((k) => k.id === activeKey) || keys[0] || null;
-  let revezar = SK.pref.get('aiRevezar', true);
-  let lastUsage = null; // tokens que o provedor informou no último pedido
-  /** Provedor e modelo da chave escolhida (para o 💰 gasto). */
-  function curInfo() {
-    const k = current(); if (!k) return { preset: '', model: '' };
-    const preset = PRESETS.find((p) => p.id === k.preset) || detect(k.key) || PRESETS[PRESETS.length - 1];
-    return { preset: preset.id, model: k.model || preset.model || '' };
-  }
   const tok = (s) => Math.ceil((s || '').length / 4);
 
   // ── Ajuste automático quando o modelo recusa um parâmetro ───────────────────
@@ -130,19 +121,15 @@
       names = (d.data || d.models || []).map((m) => m.id || m.name).filter(Boolean);
       if (preset.id === 'openai') names = names.filter((n) => /^(gpt-|o\d|chatgpt)/.test(n) && !/(audio|realtime|transcribe|tts|image|embedding|moderation|search)/.test(n));
     }
-    // OpenRouter: os modelos grátis (":free") vêm primeiro
-    return [...new Set(names)].sort((a, b) => (/:free$/.test(b) - /:free$/.test(a)) || a.localeCompare(b));
+    return [...new Set(names)].sort();
   }
 
   /** Envia a conversa. onText recebe o texto completo até agora (streaming). */
-  async function chat(messages, system, onText, signal, kForcada) {
-    const k = kForcada || current();
+  async function chat(messages, system, onText, signal) {
+    const k = current();
     if (!k || !k.key) throw new Error('Nenhuma chave de IA. Toque em ⚙️ Chaves e cole uma (Groq e Gemini têm opção grátis).');
     const preset = PRESETS.find((p) => p.id === k.preset) || detect(k.key) || PRESETS[PRESETS.length - 1];
     const model = k.model || preset.model;
-    lastUsage = null;
-    const U = { in: 0, out: 0, seen: false };
-    const finish = (t) => { if (U.seen) lastUsage = { in: U.in, out: U.out }; return t; };
     if (preset.kind === 'anthropic') {
       const r = await aiFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST', signal,
@@ -150,34 +137,25 @@
         body: JSON.stringify({ model, max_tokens: 16000, system, messages, stream: true }),
       });
       if (!r.ok) throw new Error(await errorText(r));
-      return finish(await readSSE(r, (j) => (j.type === 'content_block_delta' && j.delta && j.delta.text) || '', onText, (j) => {
-        const u = (j.message && j.message.usage) || j.usage;
-        if (u) { U.seen = true; if (u.input_tokens != null) U.in = u.input_tokens + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); if (u.output_tokens != null) U.out = u.output_tokens; }
-      }));
+      return readSSE(r, (j) => (j.type === 'content_block_delta' && j.delta && j.delta.text) || '', onText);
     }
     if (preset.kind === 'gemini') {
       const r = await gFetch(k, 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
         method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(geminiBody(messages, system)),
       });
-      return finish(await readSSE(r, (j) => ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter((x) => x.text && !x.thought).map((x) => x.text).join(''), onText, (j) => {
-        const u = j.usageMetadata; if (u && u.promptTokenCount != null) { U.seen = true; U.in = u.promptTokenCount; U.out = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0); }
-      }));
+      return readSSE(r, (j) => ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter((x) => x.text && !x.thought).map((x) => x.text).join(''), onText);
     }
     const base = (k.base || preset.base).replace(/\/+$/, '');
     if (!base) throw new Error('Informe a URL base da API nesta chave.');
     const r = await aiFetch(base + '/chat/completions', {
       method: 'POST', signal,
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k.key },
-      body: JSON.stringify(Object.assign({ model, messages: [{ role: 'system', content: system }].concat(messages), stream: true, max_tokens: 16384, temperature: 0.4 },
-        ['openai', 'openrouter', 'groq', 'xai'].includes(preset.id) ? { stream_options: { include_usage: true } } : {})),
+      body: JSON.stringify({ model, messages: [{ role: 'system', content: system }].concat(messages), stream: true, max_tokens: 16384, temperature: 0.4 }),
     });
     if (!r.ok) throw new Error(await errorText(r));
-    return finish(await readSSE(r, (j) => (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || '', onText, (j) => {
-      const u = j.usage || (j.x_groq && j.x_groq.usage);
-      if (u && u.prompt_tokens != null) { U.seen = true; U.in = u.prompt_tokens; U.out = u.completion_tokens || 0; }
-    }));
+    return readSSE(r, (j) => (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || '', onText);
   }
-  async function readSSE(r, pick, onText, onJson) {
+  async function readSSE(r, pick, onText) {
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = '', full = '';
     for (;;) {
@@ -190,56 +168,16 @@
         if (!l.startsWith('data:')) continue;
         const data = l.slice(5).trim();
         if (data === '[DONE]') continue;
-        try { const j = JSON.parse(data); if (onJson) { try { onJson(j); } catch {} } const piece = pick(j); if (piece) { full += piece; onText(full); } } catch {}
+        try { const piece = pick(JSON.parse(data)); if (piece) { full += piece; onText(full); } } catch {}
       }
     }
     return full;
   }
 
   // ── Contexto e memória ──────────────────────────────────────────────────────
-  // Ficha do ambiente: vai em TODA pergunta, para a IA saber onde está sem o usuário explicar.
-  function fichaAmbiente() {
-    return 'ONDE VOCÊ ESTÁ (não precisa repetir isso para o usuário):\n' +
-      '- Você está dentro do MINI SK, um editor de código que roda inteiro no NAVEGADOR (celular ou PC), feito em HTML + JS puro, sem servidor.\n' +
-      '- O usuário é advogado, usa quase só o celular, tem dificuldade nas mãos (prefere voz) e não é programador. Explique simples e um passo de cada vez.\n' +
-      '- Os projetos ficam salvos SÓ neste aparelho (IndexedDB do navegador). Não há banco de dados, nem login, nem nuvem. Backup = 💾 Backup de tudo (JSON) ou enviar ao GitHub.\n' +
-      '- O que o Mini SK TEM (diga qual botão usar quando ajudar): ☰ Arquivos (criar, renomear, mover, importar arquivos/pasta/.zip); editor com cores; ' +
-      'Preview ao vivo embaixo (junta HTML, CSS, JS, imagens, módulos e fetch de .json do projeto; mostra o console com erros); 🔎 Busca e troca em todos os arquivos; ' +
-      '📸 Checkpoints (pontos de volta, automáticos antes de mudanças grandes); ⌨️ Terminal LEVE (ls, cd, cat, grep, find, mkdir, rm, mv, cp, zip, run/node para JS simples, npm search/info/install via CDN) — NÃO é um terminal de verdade; ' +
-      '🐙 GitHub (importar repositório, enviar só o que mudou, criar repositório, GitHub Pages, ver Actions e o erro de cada passo); ▶️ Playground (HTML, React, Python no navegador); ' +
-      '🧬 Raio-X (analisa package.json, dependências, marcas da Replit, gera plano e "pacote para a IA"); ✂️ Fatiador (divide arquivo grande em módulos e confere); 🧩 Desembaralhar conversa de IA em arquivos; ' +
-      '📱 PWA (ícones, manifest, service worker, Hub de links); 📦 APK (cria projeto Android + receita do GitHub Actions e acompanha o build); 🧪 Testador de API (para servidor rodando no PC); ' +
-      '🔗 Ponte com o Cirurgião (manda o projeto para análise e recebe os arquivos corrigidos); 🔗 Meus Links; 🗣️ voz e modo conversa; 💰 controle de gasto; 🔁 revezar chaves grátis.\n' +
-      '- O que o Mini SK NÃO faz: não roda Node/Express/servidor de verdade, não roda npm install de verdade, não compila TypeScript/React de projeto grande (Vite/Next), não acessa o disco do PC fora do que foi importado, ' +
-      'e a internet só funciona para sites que permitem (CORS). Para essas coisas, diga ao usuário para usar o CodeLens no PC (tem terminal de verdade) ou o GitHub Actions.\n' +
-      '- Você NÃO tem acesso direto aos arquivos fora do contexto. Se precisar ver um arquivo do projeto que não veio, escreva numa linha sozinha: LER: caminho/do/arquivo  (um por linha). Aparece um botão e o usuário manda com um toque. Não invente o conteúdo de arquivo que você não viu.\n';
-  }
-  function resumoProjeto() {
-    const lista = fs().list().filter((f) => !f.startsWith('.sk/'));
-    const out = ['RESUMO AUTOMÁTICO DO PROJETO:', '- ' + lista.length + ' arquivos.'];
-    const pk = lista.filter((f) => /(^|\/)package\.json$/.test(f) && !/node_modules/.test(f)).slice(0, 6);
-    pk.forEach((f) => {
-      try {
-        const j = JSON.parse(fs().read(f) || '{}'), deps = Object.keys(Object.assign({}, j.dependencies, j.devDependencies));
-        out.push('- ' + f + ': nome "' + (j.name || '') + '"; comandos: ' + (Object.keys(j.scripts || {}).join(', ') || 'nenhum') + '; ' + deps.length + ' pacotes' + (deps.length ? ' (' + deps.slice(0, 30).join(', ') + (deps.length > 30 ? '…' : '') + ')' : '') + '.');
-      } catch { out.push('- ' + f + ': (package.json com erro de escrita)'); }
-    });
-    const tem = (re) => lista.some((f) => re.test(f));
-    const sinais = [];
-    if (tem(/(^|\/)index\.html$/)) sinais.push('tem index.html');
-    if (tem(/\.tsx?$/)) sinais.push('usa TypeScript');
-    if (tem(/\.(jsx|tsx)$/)) sinais.push('usa React');
-    if (tem(/(^|\/)vite\.config\./)) sinais.push('Vite');
-    if (tem(/(^|\/)app\.json$/) && tem(/(^|\/)eas\.json$/)) sinais.push('Expo/EAS (app de celular)');
-    if (tem(/capacitor\.config/)) sinais.push('Capacitor');
-    if (tem(/(^|\/)\.replit$|replit\.nix|pnpm-workspace\.yaml/)) sinais.push('veio da Replit (monorepo)');
-    if (tem(/(^|\/)server\/|(^|\/)api-server\//)) sinais.push('tem parte de servidor (não roda aqui; só no PC)');
-    if (sinais.length) out.push('- Sinais: ' + sinais.join('; ') + '.');
-    return out.join('\n');
-  }
   function systemPrompt() {
-    const base = 'Você é a assistente de programação do Mini SK. Responda SEMPRE em português do Brasil, de forma simples (o usuário não é programador).\n\n' + fichaAmbiente();
-    if (freeMode || !fs().project) return base + '\nEste é o chat livre (nenhum projeto aberto).';
+    const base = 'Você é a assistente de programação do Mini SK. Responda SEMPRE em português do Brasil, de forma simples (o usuário não é programador).';
+    if (freeMode || !fs().project) return base + ' Este é o chat livre.';
     const P = fs().project;
     return base + '\n\nREGRAS PARA CÓDIGO:\n' +
       '1. Para criar ou alterar um arquivo, mande o ARQUIVO INTEIRO num bloco assim:\n```html filepath:caminho/arquivo.html\n...código completo...\n```\n' +
@@ -247,7 +185,7 @@
       '3. Prefira arquivos pequenos e separados (um assunto por arquivo, até uns 300 linhas). Se um arquivo ficar grande, divida em módulos.\n' +
       '4. Não use Replit, nem serviços pagos escondidos. O projeto precisa abrir pelo index.html.\n' +
       '5. Depois de uma tarefa importante, atualize ' + DIARY + ' (num bloco filepath) com: o que foi feito, decisões, o que falta. Esse diário é a sua memória.\n\n' +
-      resumoProjeto() + '\n\nPROJETO: ' + P.name + '\nARQUIVOS:\n' + fs().list().filter((f) => !f.startsWith('.sk/')).slice(0, 400).join('\n');
+      'PROJETO: ' + P.name + '\nARQUIVOS:\n' + fs().list().filter((f) => !f.startsWith('.sk/')).slice(0, 400).join('\n');
   }
   function contextBlock() {
     if (freeMode || !fs().project) return '';
@@ -282,8 +220,7 @@
     if (!meterEl) return;
     const { total, dropped } = buildMessages(inputEl ? inputEl.value : '');
     const pct = Math.min(100, Math.round(total / ctxLimit * 100));
-    const ci = curInfo();
-    meterEl.innerHTML = '<span class="bar"><i style="width:' + pct + '%"></i></span> ≈ ' + SK.fmt(total) + ' / ' + SK.fmt(ctxLimit) + ' tokens' + (SK.gasto ? SK.esc(SK.gasto.previa(ci.preset, ci.model, total)) : '') + (dropped ? ' · ' + dropped + ' mensagens antigas ficam de fora' : '');
+    meterEl.innerHTML = '<span class="bar"><i style="width:' + pct + '%"></i></span> ≈ ' + SK.fmt(total) + ' / ' + SK.fmt(ctxLimit) + ' tokens' + (dropped ? ' · ' + dropped + ' mensagens antigas ficam de fora' : '');
   }
 
   function loadMemory() {
@@ -295,41 +232,6 @@
     const keep = history.slice(-200);
     if (freeMode || !fs().project) { SK.pref.set('aiFreeHistory', keep.slice(-60)); return; }
     fs().write(MEM, JSON.stringify(keep, null, 1), { silent: true });
-  }
-
-  // ── A IA pediu arquivo(s) com "LER: caminho": manda com um toque ─────────────
-  function acharArquivo(c) {
-    const lista = fs().list(), limpo = c.replace(/^\.?\/+/, '');
-    return lista.find((f) => f === limpo) || lista.find((f) => f.endsWith('/' + limpo)) || lista.find((f) => f.toLowerCase() === limpo.toLowerCase()) || null;
-  }
-  function mandarArquivos(caminhos) {
-    if (!fs().project) { SK.toast('Abra o projeto primeiro', 'error'); return; }
-    const partes = [], faltam = [];
-    caminhos.forEach((c) => { const f = acharArquivo(c); const t = f && fs().read(f); if (t == null) faltam.push(c); else partes.push('ARQUIVO PEDIDO: ' + f + '\n```\n' + t.slice(0, 80000) + (t.length > 80000 ? '\n…(cortado: arquivo muito grande)' : '') + '\n```'); });
-    if (!partes.length) { SK.toast('Não achei ' + faltam.join(', ') + ' no projeto', 'error'); return; }
-    inputEl.value = partes.join('\n\n') + (faltam.length ? '\n\n(Não existem no projeto: ' + faltam.join(', ') + ')' : '') + '\n\nAí estão os arquivos que você pediu. Continue a tarefa.';
-    send();
-  }
-
-  // ── Memória em arquivo: baixar e trazer de volta (nunca repetir explicação) ──
-  function exportarMemoria() {
-    const P = fs().project;
-    const dados = { app: 'minisk-memoria', versao: 1, projeto: P && !freeMode ? P.name : '(chat livre)', criado: new Date().toISOString(), historico: history, diario: P && !freeMode ? (fs().read(DIARY) || '') : '' };
-    SK.download('memoria-' + (dados.projeto || 'chat').replace(/[^\w.-]+/g, '-') + '-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify(dados, null, 1), 'application/json');
-    SK.toast('💾 Memória baixada (' + history.length + ' mensagens' + (dados.diario ? ' + diário' : '') + ')', 'ok');
-  }
-  async function importarMemoria(arq) {
-    let d; try { d = JSON.parse(await arq.text()); } catch { SK.toast('Arquivo de memória inválido', 'error'); return; }
-    const hist = Array.isArray(d) ? d : d.historico;
-    if (!Array.isArray(hist) || !hist.every((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')) { SK.toast('Esse arquivo não é uma memória do Mini SK', 'error'); return; }
-    const juntar = history.length && await SK.confirm('Já existe conversa aqui (' + history.length + ' mensagens). Juntar a memória trazida no fim? (Cancelar = substituir)', { okText: 'Juntar' });
-    history = juntar ? history.concat(hist) : hist.slice();
-    saveMemory();
-    if (d.diario && fs().project && !freeMode) {
-      const atual = fs().read(DIARY) || '';
-      fs().write(DIARY, atual && atual !== d.diario ? atual + '\n\n---\n(diário trazido de ' + (d.projeto || 'outro lugar') + ')\n' + d.diario : d.diario);
-    }
-    renderLog(); SK.toast('📥 Memória trazida: ' + hist.length + ' mensagens', 'ok');
   }
 
   // ── Mostrar mensagens ───────────────────────────────────────────────────────
@@ -345,8 +247,6 @@
       .replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
       .replace(/^#{1,4} (.*)$/gm, '<b class="h">$1</b>').replace(/^\s*[-*] (.*)$/gm, '• $1')
       .replace(/\n/g, '<br>');
-    html = html.replace(/(^|<br>)\s*(?:<b>)?LER:(?:<\/b>)?\s*(?:<code>)?([^\s<]+?)(?:<\/code>)?(?=<br>|$)/g, (m, ini, cam) =>
-      ini + '<button class="btn tiny primary" data-ler="' + cam.replace(/"/g, '') + '">📎 Mandar ' + cam + ' para a IA</button>');
     html = html.replace(/\u0000B(\d+)\u0000/g, (m, i) => {
       const b = blocks[+i];
       const t = fs().typeOf(b.fp || ('x.' + (b.lang || 'txt')));
@@ -393,9 +293,7 @@
   async function send() {
     const text = inputEl.value.trim();
     if (!text || busy) return;
-    const { sys, messages, total: tin } = buildMessages(text);
-    const ci = curInfo();
-    if (SK.gasto && current() && !(await SK.gasto.antes(ci.preset, ci.model, tin))) return;
+    const { sys, messages } = buildMessages(text);
     history.push({ role: 'user', content: text });
     if (logEl.querySelector('.ai-hello')) logEl.innerHTML = '';
     addMsg('user', text);
@@ -406,52 +304,20 @@
     setBusy(true);
     let full = '';
     try {
-      // 🔁 Revezar: se a IA escolhida bater o limite (comum nas grátis), tenta a próxima chave sozinho
-      const fila = [current()].concat(revezar ? keys.filter((x) => x && x.key && x !== current()) : []).filter(Boolean);
-      let ultimoErro = null;
-      for (let t = 0; t < fila.length; t++) {
-        try {
-          full = await chat(messages, sys, (tx) => { full = tx; out.innerHTML = mdLite(tx).html; logEl.scrollTop = logEl.scrollHeight; }, busy.signal, fila[t]);
-          if (t > 0) { const nomeK = (PRESETS.find((x) => x.id === fila[t].preset) || {}).label || 'outra chave'; const av = document.createElement('div'); av.className = 'muted small'; av.textContent = '🔁 A IA anterior bateu o limite — respondeu: ' + nomeK.replace(/ \(.*\)/, ''); out.before(av); }
-          ultimoErro = null; break;
-        } catch (er) {
-          ultimoErro = er;
-          if (er.name === 'AbortError' || full || t === fila.length - 1 || !/429|limit|quota|exhaust|rate|overload|503|502|500|Failed to fetch|NetworkError|tempo|unavailable/i.test(er.message || '')) throw er;
-          const nomeK = (PRESETS.find((x) => x.id === fila[t + 1].preset) || {}).label || 'próxima chave';
-          out.innerHTML = '<span class="muted">⚠ Limite ou falha nesta IA — tentando ' + SK.esc(nomeK.replace(/ \(.*\)/, '')) + '…</span>';
-        }
-      }
-      if (ultimoErro) throw ultimoErro;
+      full = await chat(messages, sys, (t) => { full = t; out.innerHTML = mdLite(t).html; logEl.scrollTop = logEl.scrollHeight; }, busy.signal);
       if (!full) full = '(sem resposta)';
       history.push({ role: 'assistant', content: full });
       saveMemory();
-      out.remove(); const msgEl = addMsg('assistant', full);
-      costLine(msgEl, ci, tin, full, false);
-      if (((full.match(/```/g) || []).length % 2) === 1) continueBtn(msgEl, 'A resposta parece ter parado no meio de um código.');
-      SK.emit('ai-resposta', full);
-      if (speak && SK.voz && !SK.voz.conversa) SK.voz.falar(full);
+      out.remove(); addMsg('assistant', full);
+      if (speak && 'speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(full.replace(/```[\s\S]*?```/g, ' (código) ').replace(/[*#`>_]/g, '').slice(0, 3000)); u.lang = 'pt-BR'; speechSynthesis.cancel(); speechSynthesis.speak(u); }
     } catch (e) {
       out.classList.remove('typing');
-      if (e.name === 'AbortError') { if (full) { history.push({ role: 'assistant', content: full + '\n\n(interrompido)' }); saveMemory(); costLine(out, ci, tin, full, true); continueBtn(out, 'Interrompido.'); } out.insertAdjacentHTML('beforeend', '<div class="muted">(interrompido)</div>'); }
-      else { SK.emit('ai-falhou'); history.pop(); out.className = 'msg error'; out.textContent = '⚠ ' + (e.message || e) + (/Failed to fetch|NetworkError/i.test(e.message) ? ' — sem internet, ou o provedor não aceita chamadas direto do navegador.' : ''); }
+      if (e.name === 'AbortError') { if (full) { history.push({ role: 'assistant', content: full + '\n\n(interrompido)' }); saveMemory(); } out.insertAdjacentHTML('beforeend', '<div class="muted">(interrompido)</div>'); }
+      else { history.pop(); out.className = 'msg error'; out.textContent = '⚠ ' + (e.message || e) + (/Failed to fetch|NetworkError/i.test(e.message) ? ' — sem internet, ou o provedor não aceita chamadas direto do navegador.' : ''); }
     }
     busy = null; setBusy(false);
     logEl.scrollTop = logEl.scrollHeight;
     updateMeter();
-  }
-  /** 💰 linha de gasto embaixo da resposta */
-  function costLine(el, ci, tin, full, partial) {
-    if (!SK.gasto || !el) return;
-    const u = lastUsage;
-    const t = SK.gasto.registra({ preset: ci.preset, model: ci.model, tin: u ? u.in : tin, tout: u ? u.out : tok(full), estimado: !u || partial });
-    const d = document.createElement('div'); d.className = 'ai-cost muted small'; d.textContent = t; el.appendChild(d);
-  }
-  /** ▶ Continuar de onde parou (quando a resposta foi cortada) */
-  function continueBtn(el, why) {
-    const b = document.createElement('button'); b.className = 'btn small';
-    b.textContent = '▶ Continuar de onde parou'; b.title = why;
-    b.onclick = () => { b.remove(); inputEl.value = 'Continue exatamente de onde parou, sem repetir nada do que já escreveu. Se estava no meio de um arquivo, mande o arquivo inteiro de novo num bloco filepath.'; send(); };
-    el.appendChild(b);
   }
   function setBusy(on) {
     SK.$('#ai-send', box).hidden = on; SK.$('#ai-stop', box).hidden = !on;
@@ -466,8 +332,6 @@
       '<button class="btn small" id="ai-keys-btn">⚙️ Chaves</button>' +
       '<label class="chk"><input type="checkbox" id="ai-free"> Chat livre</label>' +
       '<label class="chk"><input type="checkbox" id="ai-speak"> 🔊 Falar</label>' +
-      '<label class="chk" title="Se a IA bater o limite do dia (comum nas grátis), passa sozinho para a próxima chave da lista"><input type="checkbox" id="ai-revezar"> 🔁 Revezar grátis</label>' +
-      '<button class="btn small" id="ai-plano" title="Monta um pedido para a IA criar um plano de conserto do projeto aberto">📋 Plano de conserto</button>' +
       '</div>' +
       '<div class="ai-keys" id="ai-keys" hidden></div>' +
       '<div class="ai-log" id="ai-log" aria-live="polite"></div>' +
@@ -478,25 +342,15 @@
       '<label class="chk"><input type="checkbox" id="ai-c-log"> Erros do preview</label>' +
       '</div>' +
       '<div class="ai-meter muted" id="ai-meter"></div>' +
-      '<button class="ai-gasto" id="ai-gasto" title="Ver gasto, limite do mês e preços"></button>' +
-      '<div class="ai-voz-status muted small" id="ai-voz-status" hidden></div>' +
-      '<details class="ai-voz-aj"><summary class="small muted">🎚️ Voz (Francisca · 1,15 · tom 0,95 · pausa 3 s)</summary><div id="ai-voz-aj"></div></details>' +
       '<div class="ai-input">' +
       '<textarea class="inp" id="ai-in" rows="3" placeholder="Ex.: crie uma página de login em arquivos separados (html, css, js)"></textarea>' +
       '<div class="row wrap">' +
       '<button class="btn primary" id="ai-send">Enviar</button><button class="btn danger" id="ai-stop" hidden>Parar</button>' +
       '<button class="btn small" id="ai-mic" title="Ditar">🎤</button>' +
-      '<button class="btn small" id="ai-conversa" title="Modo conversa: fale, pare 3 segundos, ele responde em voz alta e volta a ouvir">🗣️ Conversa</button>' +
       '<label class="chk muted">Limite <select class="inp tiny" id="ai-limit">' + [8000, 16000, 24000, 32000, 64000, 128000, 200000].map((n) => '<option value="' + n + '"' + (n === ctxLimit ? ' selected' : '') + '>' + SK.fmt(n) + '</option>').join('') + '</select> tokens</label>' +
       '<button class="btn small" id="ai-clear" title="Apagar a conversa deste projeto">Limpar conversa</button>' +
-      '<button class="btn small" id="ai-mem-out" title="Baixar a conversa e o diário num arquivo .json (para trazer de volta depois, em qualquer aparelho)">⬇ Memória</button>' +
-      '<button class="btn small" id="ai-mem-in" title="Trazer uma memória (.json) baixada antes">⬆ Memória</button><input type="file" id="ai-mem-file" accept=".json,application/json" hidden>' +
       '</div></div>';
     logEl = SK.$('#ai-log', box); inputEl = SK.$('#ai-in', box); meterEl = SK.$('#ai-meter', box);
-    const gEl = SK.$('#ai-gasto', box);
-    const renderGasto = () => { if (SK.gasto) gEl.innerHTML = SK.gasto.resumoHTML(); else gEl.hidden = true; };
-    gEl.onclick = () => SK.gasto && SK.gasto.painel();
-    SK.on('gasto-mudou', () => { renderGasto(); updateMeter(); }); renderGasto();
     SK.$('#ai-free', box).checked = freeMode; SK.$('#ai-speak', box).checked = speak;
     SK.$('#ai-send', box).onclick = send;
     SK.$('#ai-stop', box).onclick = () => busy && busy.abort();
@@ -507,45 +361,14 @@
     SK.$('#ai-free', box).onchange = (e) => { freeMode = e.target.checked; SK.pref.set('aiFree', freeMode); SK.$('#ai-ctx', box).hidden = freeMode; loadMemory(); renderLog(); };
     SK.$('#ai-speak', box).onchange = (e) => { speak = e.target.checked; SK.pref.set('aiSpeak', speak); if (!speak && 'speechSynthesis' in window) speechSynthesis.cancel(); };
     SK.$('#ai-key', box).onchange = (e) => { activeKey = e.target.value; saveKeys(); };
-    SK.$('#ai-revezar', box).checked = revezar;
-    SK.$('#ai-revezar', box).onchange = (e) => { revezar = e.target.checked; SK.pref.set('aiRevezar', revezar); };
-    SK.$('#ai-plano', box).onclick = () => {
-      inputEl.value = 'Quero consertar este projeto, um passo de cada vez. Olhe os arquivos que estão no contexto e me entregue um PLANO DE CONSERTO em português simples (sou advogado, não programador):\n' +
-        '1. O que o projeto faz (em 3 linhas).\n2. Lista dos problemas que você encontrar, do mais grave para o menos grave, com o ARQUIVO e a LINHA de cada um.\n' +
-        '3. Para cada problema: o que ele causa na tela e como consertar.\n4. A ordem certa de conserto, em passos pequenos que eu consiga testar um por um.\n' +
-        '5. O que está faltando no projeto (arquivos, bibliotecas, configurações).\nNÃO mande código ainda — só o plano. Depois eu peço o conserto de cada passo.';
-      inputEl.focus(); SK.toast('📋 Pedido de plano pronto — confira e toque em Enviar');
-    };
     SK.$('#ai-keys-btn', box).onclick = () => { const k = SK.$('#ai-keys', box); k.hidden = !k.hidden; if (!k.hidden) renderKeys(); };
     SK.$('#ai-clear', box).onclick = async () => { if (await SK.confirm('Apagar a conversa guardada' + (freeMode ? ' do chat livre' : ' deste projeto') + '? O diário (.sk/diario.md) continua.', { danger: true, okText: 'Apagar' })) { history = []; saveMemory(); renderLog(); } };
     SK.$('#ai-mic', box).onclick = dictate;
-    SK.$('#ai-mem-out', box).onclick = exportarMemoria;
-    SK.$('#ai-mem-in', box).onclick = () => SK.$('#ai-mem-file', box).click();
-    SK.$('#ai-mem-file', box).onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importarMemoria(f); };
-    // 🗣️ Modo conversa
-    const vozSt = SK.$('#ai-voz-status', box), vozBtn = SK.$('#ai-conversa', box), vozAj = SK.$('#ai-voz-aj', box);
-    const montarAj = () => { if (SK.voz) { vozAj.innerHTML = SK.voz.ajustesHTML(); SK.voz.ligarAjustes(vozAj); } };
-    montarAj(); SK.on('voz-lista', montarAj);
-    vozBtn.onclick = () => {
-      if (!SK.voz) return;
-      if (SK.voz.conversa) { SK.voz.desligar(); return; }
-      if (SK.voz.ligar((t) => { inputEl.value = t; send(); })) SK.toast('🗣️ Pode falar. Quando parar ' + SK.voz.cfg().pausa + ' segundos, eu mando.');
-    };
-    const ROT = { ouvindo: '🎙️ Ouvindo… (pare de falar para enviar)', pensando: '🤖 Pensando…', falando: '🔊 Falando… (toque em ⏹ Parar conversa para interromper)', parado: '', desligado: '' };
-    SK.on('voz-estado', (e) => {
-      const ativa = SK.voz && SK.voz.conversa;
-      vozBtn.textContent = ativa ? '⏹ Parar conversa' : '🗣️ Conversa';
-      vozBtn.classList.toggle('danger', !!ativa);
-      vozSt.hidden = !ativa || !ROT[e]; vozSt.textContent = ROT[e] || '';
-    });
-    SK.on('voz-ouvindo', (t) => { if (SK.voz && SK.voz.conversa) { vozSt.hidden = false; vozSt.textContent = '🎙️ ' + (t || 'Ouvindo…'); } });
     logEl.addEventListener('click', onCodeBtn);
     SK.$('#ai-ctx', box).hidden = freeMode;
     renderKeySelect();
   }
   function onCodeBtn(e) {
-    const lb = e.target.closest('[data-ler]');
-    if (lb) { mandarArquivos([lb.dataset.ler]); return; }
     const b = e.target.closest('[data-cb]'); if (!b) return;
     const msg = b.closest('.msg'); const i = +b.closest('.cb').dataset.b; const blk = msg._blocks && msg._blocks[i];
     if (!blk) return;
@@ -613,8 +436,6 @@
   }
 
   SK.on('project-open', () => { if (box) { loadMemory(); renderLog(); } });
-  // Chaves vieram da conta (☁️ cofre): recarrega a lista
-  SK.on('cofre-aplicado', () => { keys = SK.pref.get('aiKeys', []); activeKey = SK.pref.get('aiActive', null); if (box) { renderKeys(); renderKeySelect(); updateMeter(); } });
   SK.on('file-open', () => updateMeter());
   SK.on('ai-analyze', (path) => {
     SK.app.openSide('ai');

@@ -295,47 +295,6 @@
     return rep.length ? rep : ['✅ Nada da Replit encontrado para tirar.'];
   }
 
-
-  // ── 🧩 Conversa sem marcação ────────────────────────────────────────────────
-  let conv = null, convName = '';
-  function convParse() {
-    const txt = SK.$('#rx-txt', box).value;
-    if (!txt.trim()) return SK.toast('Cole a conversa ou abra o .md/.txt primeiro', 'error');
-    conv = SK.conversa.parse(txt);
-    conv.items.forEach((it) => { it.on = it.latest || /^montagem-/.test(it.outPath); });
-    const el = SK.$('#rx-conv-out', box);
-    if (!conv.items.length) { el.innerHTML = '<p class="muted">Não achei código nessa conversa.</p>'; return; }
-    const folders = {}; conv.items.forEach((it, k) => { const f = it.outPath.split('/')[0]; (folders[f] = folders[f] || []).push(k); });
-    const desc = (f) => /^montagem-/.test(f) ? '🧱 ' + f + ' — uma tentativa da IA montada em partes ("PARTE 1, 2, 3…"), já na estrutura de pastas que ela pediu' : f === 'paginas' ? '📄 páginas HTML inteiras (abrem sozinhas)' : '🧩 trechos soltos (pedaços para colar dentro de outro arquivo)';
-    el.innerHTML = '<div class="ft-sum"><b>' + conv.items.length + ' códigos recuperados</b> de ' + SK.fmt(conv.lines) + ' linhas · ' + conv.items.filter((i) => i.doc).length + ' páginas inteiras · ' + Object.keys(folders).filter((f) => /^montagem-/.test(f)).length + ' montagens' + (conv.speakers.length ? '<div class="small muted">Escrito por: ' + SK.esc(conv.speakers.join(', ')) + '</div>' : '') + '<div class="small muted" id="rx-conv-sum"></div></div>' +
-      '<div class="row wrap"><button class="btn primary" data-cv="make">⤵ Criar os marcados</button><button class="btn small" data-cv="all">Marcar todos</button><button class="btn small" data-cv="latest">Só os mais recentes</button><button class="btn small" data-cv="txt">⤓ TXT com marcadores</button><button class="btn small" data-cv="idx">⤓ Índice .md</button></div>' +
-      Object.entries(folders).map(([f, ks]) => '<details class="cv-f"' + (/^montagem-|paginas/.test(f) ? ' open' : '') + '><summary><b>' + SK.esc(f) + '/</b> <span class="muted small">' + ks.length + ' arquivo(s) — ' + SK.esc(desc(f)) + '</span></summary>' +
-        ks.map((k) => { const it = conv.items[k]; return '<div class="cv-it" data-ci="' + k + '"><input type="checkbox" data-f="on"' + (it.on ? ' checked' : '') + '><div class="grow"><input class="inp mono small" data-f="path" value="' + SK.esc(it.outPath) + '"><div class="muted small">' + it.lang + ' · ' + it.lines + ' linhas' + (it.versions > 1 ? ' · <b>v' + it.version + ' de ' + it.versions + (it.latest ? ' (mais recente)' : ' (antiga)') + '</b>' : '') + (it.speaker ? ' · ' + SK.esc(it.speaker) : '') + ' · linha ' + (it.a + 1) + (it.label ? '<br>“' + SK.esc(it.label.slice(0, 110)) + '”' : '') + '</div></div><button class="btn tiny" data-cv="see">Ver</button></div>'; }).join('') + '</details>').join('');
-    convSum();
-  }
-  function convSum() { const el = SK.$('#rx-conv-sum', box); if (el && conv) el.textContent = conv.items.filter((i) => i.on).length + ' marcados para criar'; }
-  async function convClick(e) {
-    const b = e.target.closest('[data-cv]'); if (!b || !conv) return;
-    const act = b.dataset.cv;
-    if (act === 'see') { const it = conv.items[+b.closest('[data-ci]').dataset.ci]; SK.confirm(it.code.slice(0, 5000) + (it.code.length > 5000 ? '\n…(' + it.lines + ' linhas)' : ''), { title: it.outPath, okText: 'Fechar' }); return; }
-    if (act === 'all' || act === 'latest') { conv.items.forEach((it) => { it.on = act === 'all' ? true : it.latest; }); SK.$$('[data-ci]', box).forEach((r) => { SK.$('[data-f="on"]', r).checked = conv.items[+r.dataset.ci].on; }); convSum(); return; }
-    const chosen = conv.items.filter((it) => it.on);
-    const dir = 'conversa-' + new Date().toISOString().slice(0, 10);
-    if (act === 'txt') { SK.download(dir + '.txt', SK.conversa.toTXT(conv, chosen, dir)); return; }
-    if (act === 'idx') { SK.download(dir + '-indice.md', SK.conversa.indexMD(conv, convName), 'text/markdown;charset=utf-8'); return; }
-    if (act === 'make') {
-      if (!chosen.length) return SK.toast('Marque pelo menos um', 'error');
-      if (!(await SK.confirm('Criar ' + chosen.length + ' arquivo(s) na pasta "' + dir + '/"?', { okText: 'Criar' }))) return;
-      await SK.checkpoints.auto('Antes de desembaralhar a conversa');
-      chosen.forEach((it) => fs().write(dir + '/' + it.outPath, it.code + '\n', { silent: true }));
-      fs().write(dir + '/_indice.md', SK.conversa.indexMD(conv, convName), { silent: true });
-      SK.emit('fs-change', { type: 'import' });
-      SK.toast('✅ ' + chosen.length + ' arquivos criados em ' + dir + '/');
-      const firstIdx = chosen.find((it) => /^montagem-\d+\/index\.html$/.test(it.outPath)) || chosen.find((it) => it.doc);
-      if (firstIdx) SK.editor.open(dir + '/' + firstIdx.outPath, { noFocus: true });
-    }
-  }
-
   // ── Interface ───────────────────────────────────────────────────────────────
   function build(container) {
     box = container;
@@ -354,8 +313,7 @@
       '  <p class="muted small">Cole aqui (ou importe) um texto/MD com arquivos marcados — <code>===== ARQUIVO: pasta/nome.js =====</code> ou blocos <code>```js filepath:pasta/nome.js</code>. Os arquivos são criados no projeto (com checkpoint antes).</p>' +
       '  <textarea class="inp mono" id="rx-txt" rows="8" placeholder="===== ARQUIVO: index.html =====&#10;&lt;!doctype html&gt;…"></textarea>' +
       '  <div class="row wrap"><button class="btn" id="rx-file">📄 Abrir .txt/.md</button><input type="file" id="rx-file-in" accept=".txt,.md,.markdown,text/*" multiple hidden><button class="btn" id="rx-prev">Ver o que vai criar</button><button class="btn primary" id="rx-mk">⤵ Criar arquivos</button></div>' +
-      '  <div class="row wrap"><button class="btn" id="rx-conv">🧩 Conversa sem marcação</button><span class="muted small">código colado do app de IA, sem ```</span></div>' +
-      '  <div id="rx-mk-out" class="pw-rep"></div><div id="rx-conv-out"></div></div>';
+      '  <div id="rx-mk-out" class="pw-rep"></div></div>';
     const $ = (s) => SK.$(s, box);
     box.addEventListener('click', (e) => {
       const t = e.target.closest('[data-rt]'); if (t) { SK.$$('[data-rt]', box).forEach((b) => b.classList.toggle('on', b === t)); SK.$$('[data-rp]', box).forEach((p) => (p.hidden = p.dataset.rp !== t.dataset.rt)); }
@@ -371,11 +329,8 @@
     };
     $('#rx-q').addEventListener('input', SK.debounce(renderDeps, 200)); $('#rx-t').onchange = renderDeps; $('#rx-u').onchange = renderDeps;
     $('#rx-file').onclick = () => $('#rx-file-in').click();
-    $('#rx-file-in').onchange = async (e) => { convName = e.target.files[0] ? e.target.files[0].name : ''; let t = ''; for (const f of e.target.files) t += (t ? '\n' : '') + fs().decodeBytes(new Uint8Array(await f.arrayBuffer())).text; $('#rx-txt').value = t; e.target.value = ''; preview(); };
+    $('#rx-file-in').onchange = async (e) => { let t = ''; for (const f of e.target.files) t += (t ? '\n' : '') + fs().decodeBytes(new Uint8Array(await f.arrayBuffer())).text; $('#rx-txt').value = t; e.target.value = ''; preview(); };
     $('#rx-prev').onclick = preview;
-    $('#rx-conv').onclick = () => convParse();
-    $('#rx-conv-out').addEventListener('click', convClick);
-    $('#rx-conv-out').addEventListener('change', (e) => { const r = e.target.closest('[data-ci]'); if (!r || !conv) return; const it = conv.items[+r.dataset.ci]; if (e.target.dataset.f === 'on') it.on = e.target.checked; if (e.target.dataset.f === 'path') it.outPath = e.target.value.trim() || it.outPath; convSum(); });
     $('#rx-mk').onclick = async () => {
       const list = parseMarked($('#rx-txt').value);
       if (!list.length) return SK.toast('Não achei arquivos marcados no texto', 'error');
@@ -389,7 +344,7 @@
   }
   function preview() {
     const list = parseMarked(SK.$('#rx-txt', box).value);
-    SK.$('#rx-mk-out', box).innerHTML = list.length ? list.length + ' arquivo(s) encontrados:' + list.map((x) => '<div>' + (fs().exists(x.path) ? '♻️ ' : '➕ ') + SK.esc(x.path) + ' <span class="muted small">' + SK.fmt(x.text.split('\n').length) + ' linhas</span></div>').join('') : '<span class="muted">Nenhum arquivo marcado encontrado. Se é uma conversa copiada do app de IA, toque em 🧩 Conversa sem marcação.</span>';
+    SK.$('#rx-mk-out', box).innerHTML = list.length ? list.length + ' arquivo(s) encontrados:' + list.map((x) => '<div>' + (fs().exists(x.path) ? '♻️ ' : '➕ ') + SK.esc(x.path) + ' <span class="muted small">' + SK.fmt(x.text.split('\n').length) + ' linhas</span></div>').join('') : '<span class="muted">Nenhum arquivo marcado encontrado.</span>';
   }
   function run() {
     if (!fs().project) return;

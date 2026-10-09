@@ -95,11 +95,6 @@ dependencies {
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:label="@string/app_name"
@@ -135,8 +130,6 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.PermissionRequest;
-import android.content.pm.PackageManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -148,15 +141,9 @@ import android.widget.Toast;
 
 import androidx.webkit.WebViewAssetLoader;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * App de uma tela só: abre o index.html que vai DENTRO do APK (pasta assets/www).
@@ -168,8 +155,6 @@ public class MainActivity extends Activity {
     private static final int ESCOLHER_ARQUIVO = 41;
     private WebView web;
     private ValueCallback<Uri[]> retornoArquivo;
-    private static final int PEDIR_MICROFONE = 42;
-    private PermissionRequest pedidoPendente;
 
     @Override
     protected void onCreate(Bundle salvo) {
@@ -192,21 +177,13 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
-                WebResourceResponse r = carregador.shouldInterceptRequest(req.getUrl());
-                String c = req.getUrl().getPath();
-                if (r != null && c != null && (c.toLowerCase().endsWith(".html") || c.toLowerCase().endsWith(".htm"))) return comPonte(r);
-                return r;
+                return carregador.shouldInterceptRequest(req.getUrl());
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
                 Uri u = req.getUrl();
-                String esquema = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
                 if ("appassets.androidplatform.net".equals(u.getHost())) return false;
-                // páginas montadas dentro do app (preview, playground): blob:, data:, about:
-                if (esquema.equals("blob") || esquema.equals("data") || esquema.equals("about") || esquema.equals("javascript")) return false;
-                // quadros internos (iframe) carregam dentro do app
-                if (!req.isForMainFrame()) return false;
                 // links de fora (sites) abrem no navegador do celular
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignorado) { }
                 return true;
@@ -229,23 +206,6 @@ public class MainActivity extends Activity {
                     return false;
                 }
                 return true;
-            }
-
-            // microfone/câmera: o Android pergunta ao usuário quando a página pede
-            @Override
-            public void onPermissionRequest(final PermissionRequest req) {
-                runOnUiThread(() -> {
-                    List<String> falta = new ArrayList<>();
-                    for (String r : req.getResources()) {
-                        String p = null;
-                        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) p = android.Manifest.permission.RECORD_AUDIO;
-                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) p = android.Manifest.permission.CAMERA;
-                        if (p != null && checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) falta.add(p);
-                    }
-                    if (falta.isEmpty()) { req.grant(req.getResources()); return; }
-                    pedidoPendente = req;
-                    requestPermissions(falta.toArray(new String[0]), PEDIR_MICROFONE);
-                });
             }
         });
 
@@ -276,39 +236,6 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    public void onRequestPermissionsResult(int pedido, String[] permissoes, int[] resultados) {
-        super.onRequestPermissionsResult(pedido, permissoes, resultados);
-        if (pedido == PEDIR_MICROFONE && pedidoPendente != null) {
-            boolean ok = resultados.length > 0;
-            for (int r : resultados) if (r != PackageManager.PERMISSION_GRANTED) ok = false;
-            if (ok) pedidoPendente.grant(pedidoPendente.getResources()); else pedidoPendente.deny();
-            pedidoPendente = null;
-        }
-    }
-
-    /** Coloca a ponte (assets/__ponte.js) no começo de cada página: faz "baixar" e "imprimir" funcionarem em qualquer HTML. */
-    private WebResourceResponse comPonte(WebResourceResponse r) {
-        try {
-            InputStream in = r.getData();
-            if (in == null) return r;
-            ByteArrayOutputStream b = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
-            in.close();
-            String html = new String(b.toByteArray(), StandardCharsets.UTF_8);
-            String tag = "<script src=\\"/assets/__ponte.js\\"></script>";
-            String baixo = html.toLowerCase();
-            int i = baixo.indexOf("<head");
-            if (i >= 0) { int f = baixo.indexOf('>', i); html = html.substring(0, f + 1) + tag + html.substring(f + 1); }
-            else html = tag + html;
-            return new WebResourceResponse("text/html", "UTF-8", new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            return r;
-        }
-    }
-
-    @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
         if (web != null && web.canGoBack()) web.goBack();
@@ -323,8 +250,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
-        // avisa a página para salvar tudo antes do app ir para o fundo (ou ser fechado)
-        if (web != null) web.evaluateJavascript("try{window.dispatchEvent(new Event('pagehide'));window.dispatchEvent(new Event('app-pausa'));}catch(e){}", null);
         super.onPause();
         CookieManager.getInstance().flush();
     }
@@ -352,112 +277,8 @@ public class MainActivity extends Activity {
                 return String.valueOf(e.getMessage());
             }
         }
-
-        @JavascriptInterface
-        public void aviso(String m) {
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, m, Toast.LENGTH_LONG).show());
-        }
     }
 }
-`;
-  T['android/app/src/main/assets/__ponte.js'] = `/* Ponte do APK Builder: faz "baixar arquivo" e "imprimir" funcionarem dentro do APK.
-   Entra sozinha no começo de cada página. Não precisa mexer. */
-(function () {
-  if (window.__ponteAPK || !window.AndroidBridge) return;
-  window.__ponteAPK = 1;
-  var B = window.AndroidBridge;
-  var P = {
-    salvar: function (b64, tipo, nome) { var r = B.salvar(nome, b64, tipo); if (r !== 'ok') B.aviso('Não consegui salvar: ' + r); },
-    aviso: function (m) { B.aviso(String(m)); },
-    erro: function (m) { try { console.error(m); } catch (e) {} }
-  };
-  var guardados = {};
-
-  // Guarda o arquivo na hora em que a página cria o link (antes de ela apagar o link)
-  var criar = URL.createObjectURL;
-  URL.createObjectURL = function (o) {
-    var u = criar.apply(URL, arguments);
-    try { if (o instanceof Blob) guardados[u] = o; } catch (e) {}
-    return u;
-  };
-
-  var EXT = { 'application/pdf': 'pdf', 'text/plain': 'txt', 'text/html': 'html', 'application/json': 'json',
-    'text/csv': 'csv', 'application/zip': 'zip', 'image/png': 'png', 'image/jpeg': 'jpg', 'audio/mpeg': 'mp3',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-    'application/msword': 'doc', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx' };
-  function mandar(blob, nome) {
-    nome = nome || 'arquivo';
-    var tipo = String(blob.type || '').split(';')[0];
-    if (nome.indexOf('.') < 0 && EXT[tipo]) nome += '.' + EXT[tipo];
-    var fr = new FileReader();
-    fr.onload = function () {
-      var s = String(fr.result);
-      P.salvar(s.substring(s.indexOf(',') + 1), blob.type || 'application/octet-stream', nome || 'arquivo');
-    };
-    fr.onerror = function () { P.aviso('Não consegui ler o arquivo para salvar.'); };
-    fr.readAsDataURL(blob);
-  }
-
-  function salvar(href, nome) {
-    try {
-      if (!href) return false;
-      if (href.indexOf('data:') === 0) {
-        var i = href.indexOf(',');
-        var meta = href.substring(5, i);
-        var dados = href.substring(i + 1);
-        var b64 = meta.indexOf(';base64') >= 0
-          ? dados
-          : btoa(unescape(encodeURIComponent(decodeURIComponent(dados))));
-        P.salvar(b64, meta.split(';')[0] || 'application/octet-stream', nome || 'arquivo');
-        return true;
-      }
-      if (guardados[href]) { mandar(guardados[href], nome); return true; }
-      if (href.indexOf('blob:') === 0 || href.indexOf(location.origin) === 0) {
-        fetch(href).then(function (r) { return r.blob(); })
-          .then(function (b) { mandar(b, nome || href.split('/').pop()); })
-          .catch(function (e) { P.aviso('Não consegui baixar: ' + e); });
-        return true;
-      }
-    } catch (e) { P.erro(String(e)); }
-    return false;
-  }
-  window.__ponteSalvar = salvar;
-
-  function nomeDe(a) {
-    var n = a.getAttribute('download');
-    return n || (a.href || '').split('/').pop().split('?')[0] || 'arquivo';
-  }
-  function local(h) { return h.indexOf('blob:') === 0 || h.indexOf('data:') === 0 || h.indexOf(location.origin) === 0; }
-
-  // Link clicado pela pessoa
-  document.addEventListener('click', function (ev) {
-    var a = ev.target && ev.target.closest ? ev.target.closest('a[download]') : null;
-    if (!a) return;
-    var h = a.href || '';
-    if (local(h) && salvar(h, nomeDe(a))) { ev.preventDefault(); ev.stopPropagation(); }
-  }, true);
-
-  // Link clicado pelo código (o jeito mais comum: a.click())
-  var clicar = HTMLAnchorElement.prototype.click;
-  HTMLAnchorElement.prototype.click = function () {
-    var h = this.href || '';
-    if (this.hasAttribute('download') && local(h) && salvar(h, nomeDe(this))) return;
-    return clicar.apply(this, arguments);
-  };
-
-  // window.open(blob) — alguns apps abrem o PDF numa aba nova
-  var abrir = window.open;
-  window.open = function (u) {
-    var h = String(u || '');
-    if (h.indexOf('blob:') === 0 || h.indexOf('data:') === 0) { if (salvar(h, 'arquivo')) return null; }
-    return abrir.apply(window, arguments);
-  };
-
-  // Imprimir não existe dentro de WebView
-  window.print = function () {
-    P.aviso('Imprimir não funciona dentro do APK. Salve o arquivo (PDF/Word) e imprima a partir dele.');
-  };
-})();
 `;
   T[WF] = `# Receita para o GitHub montar o APK — gerada pelo painel 📦 APK do Mini SK.
 # Nada aqui esconde erro: se um passo falhar, fica VERMELHO e o painel mostra onde.
@@ -710,8 +531,7 @@ jobs:
       '<div><b>Preparar arquivos</b>: cria <code>apk.config.json</code>, a pasta <code>android/</code> (app Android pequeno, em Java) e <code>.github/workflows/apk.yml</code>. Você pode ver e editar tudo na árvore.</div>' +
       '<div><b>Token</b>: o mesmo do painel 🐙 GitHub. Precisa de <b>Contents: Read and write</b> e <b>Actions: Read and write</b>.</div>' +
       '<div><b>Chave de assinatura</b>: o GitHub cria na primeira vez e guarda em <code>android/release.keystore</code>. Não apague — é ela que deixa o APK novo instalar por cima do antigo.</div>' +
-      '<div><b>Importar arquivos e baixar</b> funcionam dentro do APK, em qualquer HTML (a ponte <code>__ponte.js</code> entra sozinha): o que você baixar vai para a pasta Downloads do celular. <b>Microfone e câmera</b>: o celular pergunta na primeira vez. <b>Imprimir</b> não existe dentro de APK: o app avisa.</div>' +
-      '<div><b>Não funciona dentro de APK</b>: ditado por voz do navegador e programas que precisam de servidor (localhost, /api). Se o projeto for React/Vite, gere o site (<code>dist/</code>) antes.</div></div></details>';
+      '<div><b>Importar arquivos e baixar</b> funcionam dentro do APK: o que você baixar vai para a pasta Downloads do celular.</div></div></details>';
     const $ = (s) => SK.$(s, box);
     const save = () => {
       const c = readCfg();

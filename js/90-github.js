@@ -36,7 +36,6 @@
     const m = (data && data.message) || '';
     if (status === 401) return 'Token inválido ou vencido. Gere outro em github.com/settings/tokens.';
     if (status === 403 && /rate limit/i.test(m)) return 'Limite de uso do GitHub atingido. Com token o limite é bem maior; sem token, espere uma hora.';
-    if (/workflow/i.test(m)) return 'O token não pode mexer em receitas do GitHub (.github/workflows). Gere um token com "Workflows: Read and write" (no token clássico: marque "workflow").';
     if (status === 403) return 'O token não tem permissão para isso (' + m + '). Dê "Contents: Read and write" ao token.';
     if (status === 404) return 'Não encontrado: o repositório não existe ou o token não tem acesso a ele.';
     if (status === 409 && /empty/i.test(m)) return 'EMPTY';
@@ -158,7 +157,7 @@
     const rem = opts.mirror === false ? 0 : removed.length;
     status('✅ Enviado: ' + up + ' arquivo(s) novos/alterados, ' + same + ' iguais' + (rem ? ', ' + rem + ' apagado(s) no GitHub' : '') + '.', 'ok');
     renderLink();
-    return { up, same, removed: rem, commit: commit.html_url, sha: commit.sha };
+    return { up, same, removed: rem, commit: commit.html_url };
   }
 
   async function createRepo(name, priv) {
@@ -216,7 +215,7 @@
     box.innerHTML =
       '<div class="gh-acc" id="gh-acc"></div>' +
       '<div class="gh-tokrow" id="gh-tokrow">' +
-      '  <p class="muted small">Cole o seu token (github.com/settings/tokens → "Generate new token"). Permissões como <b>Read and write</b>: <b>Contents</b>, <b>Actions</b>, <b>Workflows</b> (para enviar as receitas de teste/APK) e <b>Administration</b> (para criar repositórios). Fica salvo só neste aparelho.</p>' +
+      '  <p class="muted small">Cole o seu token (github.com/settings/tokens → "Generate new token"). Permissões: <b>Contents</b>, <b>Actions</b> e <b>Administration</b> como <b>Read and write</b> (Administration é para criar repositórios). Fica salvo só neste aparelho.</p>' +
       '  <div class="row"><input class="inp mono grow" id="gh-token" type="password" placeholder="github_pat_… ou ghp_…" autocomplete="off"><button class="btn primary" id="gh-save">Salvar</button></div>' +
       '</div>' +
       '<div class="gh-sec"><h4>⤒ Enviar este projeto</h4>' +
@@ -226,7 +225,6 @@
       '  <details><summary class="small">Opções</summary><div class="stack" style="margin-top:6px"><label class="chk"><input type="checkbox" id="gh-mirror" checked> Apagar no GitHub o que foi apagado aqui</label><label class="chk"><input type="checkbox" id="gh-sk" checked> Enviar também a pasta .sk (memória da IA)</label><input class="inp mono" id="gh-branch" placeholder="ramo (vazio = principal)"></div></details>' +
       '  <div class="row wrap"><button class="btn primary" id="gh-push">⤒ Enviar</button><button class="btn small" id="gh-pages">🌐 Publicar site (Pages)</button></div>' +
       '  <div class="gh-status" id="gh-status"></div><div id="gh-done" class="small"></div></div>' +
-      '<div class="gh-sec" id="gh-acoes"></div>' +
       '<div class="gh-sec"><h4>⤓ Meus repositórios <button class="btn tiny" id="gh-reload" title="Atualizar lista">🔄</button></h4>' +
       '  <input class="inp" id="gh-filter" placeholder="Filtrar…">' +
       '  <div class="gh-list" id="gh-list"><p class="muted small">Salve o token para ver seus repositórios.</p></div></div>' +
@@ -254,7 +252,6 @@
       $('#gh-msg').value = '';
       $('#gh-done').innerHTML = (r.created ? '🆕 Repositório criado. ' : '') + '<a href="https://github.com/' + SK.esc(r.owner + '/' + r.repo) + '" target="_blank" rel="noopener">abrir ' + SK.esc(r.owner + '/' + r.repo) + ' ↗</a>';
       loadRepos();
-      if (SK.acoes && r.sha) SK.acoes.afterPush(r);
     });
     $('#gh-pages').onclick = () => run(async () => {
       const r = await resolveRepo($('#gh-name').value.trim() || repoSlug(fs().project.name));
@@ -276,7 +273,6 @@
       });
     });
     $('#gh-url-go').onclick = () => run(async () => { const r = parseRepo($('#gh-url').value); if (!r) throw new Error('Cole o link do repositório (https://github.com/dono/repo) ou escreva dono/repo.'); await importRepo(r.owner, r.repo, '', false); });
-    if (SK.acoes) SK.acoes.mount($('#gh-acoes'));
     renderAcc(); renderLink();
     if (token) { ensureUser().then(() => { renderAcc(); loadRepos(); }).catch((e) => status('⚠ ' + e.message, 'error')); }
   }
@@ -315,6 +311,5 @@
   }
   SK.on('project-open', () => { if (box) { SK.$('#gh-done', box).innerHTML = ''; renderLink(); } });
 
-  SK.on('cofre-aplicado', () => { const t = SK.pref.get('ghToken', ''); if (t !== token) { token = t; me = null; if (box) { renderAcc(); if (token) ensureUser().then(() => { renderAcc(); loadRepos(); }).catch(() => {}); } } });
   SK.github = { build, gh, importRepo, push, createRepo, enablePages, parseRepo, getLink, resolveRepo, ensureRepo, ensureUser, sendTo, repoSlug, get token() { return token; }, get user() { return me; } };
 })(window.SK);

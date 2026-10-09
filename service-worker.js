@@ -1,14 +1,12 @@
-// service-worker.js — gerado pelo Mini SK em 08/10/2026, 17:49:04
+// service-worker.js — gerado pelo Mini SK em 09/10/2026, 19:20:41
 // Não precisa mexer: ele guarda sozinho o que o app usa.
 const PREFIXO = 'sk-mini-sk-';
-const CACHE = PREFIXO + 'mv00emhb';
+const CACHE = PREFIXO + 'mv1j4a5z';
 // Lista feita automaticamente (para funcionar sem internet logo após instalar)
 const GUARDAR = [
   "./",
   "./css/app.css",
   "./favicon.ico",
-  "./hub.html",
-  "./hub.webmanifest",
   "./icons/apple-touch-icon.png",
   "./icons/icon-16.png",
   "./icons/icon-32.png",
@@ -28,7 +26,6 @@ const GUARDAR = [
   "./icons/maskable.svg",
   "./index.html",
   "./js/00-core.js",
-  "./js/04-conta.js",
   "./js/10-fs.js",
   "./js/20-zip.js",
   "./js/30-highlight.js",
@@ -37,19 +34,8 @@ const GUARDAR = [
   "./js/60-preview.js",
   "./js/70-search.js",
   "./js/80-ai.js",
-  "./js/81-gasto.js",
-  "./js/83-voz.js",
-  "./js/84-ponte.js",
   "./js/85-checkpoints.js",
-  "./js/86-terminal.js",
-  "./js/87-links.js",
-  "./js/88-inventario.js",
-  "./js/89-config.js",
   "./js/90-github.js",
-  "./js/91-acoes.js",
-  "./js/92-playground.js",
-  "./js/93-conversa.js",
-  "./js/94-fatiador.js",
   "./js/95-pwa.js",
   "./js/96-apk.js",
   "./js/97-analise.js",

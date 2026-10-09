@@ -10,18 +10,12 @@
   const SIDES = {
     ai: { title: '🤖 IA', build: (el) => SK.ai.build(el) },
     search: { title: '🔍 Buscar', build: (el) => SK.search.build(el) },
-    term: { title: '⌨️ Terminal', build: (el) => SK.terminal.build(el) },
-    links: { title: '🔗 Meus Links', build: (el) => SK.links.build(el) },
-    play: { title: '▶️ Playground', build: (el) => SK.playground.build(el) },
     cp: { title: '📸 Checkpoints', build: (el) => SK.checkpoints.build(el) },
     gh: { title: '🐙 GitHub', build: (el) => SK.github.build(el) },
-    ft: { title: '✂️ Fatiador — dividir em blocos', build: (el) => SK.fatiador.build(el) },
     api: { title: '🧪 Testar a API do projeto', build: (el) => SK.api.build(el) },
     apk: { title: '📦 APK — app Android de verdade', build: (el) => SK.apk.build(el) },
     rx: { title: '🧬 Raio-X do projeto', build: (el) => SK.analise.build(el) },
-    inv: { title: '📚 Inventário dos códigos', build: (el) => SK.inventario.build(el) },
     pwa: { title: '📱 PWA — ícones, instalar, Hub', build: (el) => SK.pwa.build(el) },
-    cfg: { title: '⚙️ Configuração', build: (el) => SK.config.build(el) },
     proj: { title: '🗂 Projetos', build: (el) => buildProjects(el) },
   };
   let side = null;
@@ -45,7 +39,6 @@
     SK.pref.set('side', name);
     if (name === 'proj') renderProjects();
     if (name === 'cp') SK.checkpoints.render();
-    if (name === 'ft') SK.fatiador.fill();
     if (name === 'pwa') SK.$('#side [data-side="pwa"] .seg-b.on')?.click();
   }
   function closeSide() {
@@ -70,55 +63,6 @@
   }
 
   let projBox;
-  // ── Backup de tudo (projetos + links + playground + chaves opcionais) ──────
-  const PREFS_CHAVES = ['aiKeys', 'aiActive', 'ghToken', 'ghUser', 'apiBase', 'minhasChaves'];
-  function kvTudo() {
-    return new Promise((ok, erro) => {
-      const r = indexedDB.open('mini-sk');
-      r.onerror = () => erro(r.error);
-      r.onsuccess = () => {
-        const out = {}; const tx = r.result.transaction('kv'); const c = tx.objectStore('kv').openCursor();
-        c.onsuccess = () => { const cur = c.result; if (cur) { out[cur.key] = cur.value; cur.continue(); } };
-        tx.oncomplete = () => ok(out); tx.onerror = () => erro(tx.error);
-      };
-    });
-  }
-  async function backupTudo(paraDrive) {
-    await fs().saveNow();
-    const projetos = await SK.db.all('projects');
-    const kv = await kvTudo().catch(() => ({}));
-    const comChaves = await SK.confirm('Levar também as chaves de IA, o token do GitHub e “Minhas chaves” no backup?\n\nSe sim, NÃO mande esse arquivo para ninguém.', { okText: 'Levar as chaves', cancelText: 'Sem as chaves' });
-    const prefs = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i); if (!k || k.indexOf('minisk:') !== 0) continue;
-      const nome = k.slice(7);
-      if (!comChaves && PREFS_CHAVES.includes(nome)) continue;
-      prefs[nome] = localStorage.getItem(k);
-    }
-    const dados = { app: 'mini-sk', versao: 1, data: new Date().toISOString(), comChaves: !!comChaves, projetos, kv, prefs };
-    const txt = JSON.stringify(dados);
-    const nomeBk = 'mini-sk-backup-' + new Date().toISOString().slice(0, 10) + '.json';
-    if (paraDrive) { await SK.compartilhar(nomeBk, txt, 'application/json'); return; }
-    SK.download(nomeBk, txt, 'application/json');
-    SK.toast('💾 Backup: ' + projetos.length + ' projeto(s), ' + SK.bytes(txt.length), 'ok');
-  }
-  async function restaurarTudo(file) {
-    const d = JSON.parse(await file.text());
-    if (!d || d.app !== 'mini-sk' || !Array.isArray(d.projetos)) throw new Error('não é um backup do Mini SK');
-    const existentes = new Set((await fs().listProjects()).map((p) => p.name));
-    const iguais = d.projetos.filter((p) => existentes.has(p.name)).length;
-    const msg = 'Restaurar ' + d.projetos.length + ' projeto(s) de ' + new Date(d.data).toLocaleString('pt-BR') + '?' +
-      (iguais ? '\n\n' + iguais + ' já existe(m) aqui com o mesmo nome: a versão do backup substitui a daqui.' : '') +
-      '\n\nOs projetos daqui que não estão no backup continuam como estão.';
-    if (!(await SK.confirm(msg, { okText: 'Restaurar' }))) return;
-    await fs().saveNow();
-    for (const p of d.projetos) await SK.db.put('projects', p);
-    for (const [k, v] of Object.entries(d.kv || {})) await SK.db.put('kv', v, k);
-    for (const [k, v] of Object.entries(d.prefs || {})) { try { localStorage.setItem('minisk:' + k, v); } catch {} }
-    SK.toast('✅ Restaurado. Recarregando…', 'ok');
-    setTimeout(() => location.reload(), 900);
-  }
-
   function buildProjects(el) {
     projBox = el;
     el.innerHTML =
@@ -128,13 +72,6 @@
       '<div id="pj-list" class="pj-list"></div>' +
       '<hr><h4>Editor</h4>' +
       '<div class="row wrap"><button class="btn small" id="pj-zoom-out">A−</button><button class="btn small" id="pj-zoom-in">A+</button><button class="btn small" id="pj-wrap">↩ Quebra de linha</button><button class="btn small" id="pj-goto">Ir para linha</button></div>' +
-      '<hr><h4>🔗 Ponte com outros apps</h4><p class="muted small">Manda o projeto aberto para o Cirurgião (achar problemas, corrigir) e recebe de volta só o que ele corrigiu.</p>' +
-      '<div class="row wrap"><button class="btn small primary" id="pj-cir">🩺 Mandar para o Cirurgião</button><button class="btn small" id="pj-cir-end">Endereço do Cirurgião</button></div>' +
-      '<hr><h4>💾 Backup de tudo</h4><p class="muted small">Um arquivo só com <b>todos os projetos</b>, os Links, o Playground e (se quiser) as chaves. Serve para guardar uma cópia e para passar tudo do PWA para o APK, ou de um aparelho para outro.</p>' +
-      '<div class="row wrap"><button class="btn small primary" id="pj-bk">⤓ Baixar backup de tudo</button><button class="btn small" id="pj-rs">⤒ Restaurar backup</button></div>' +
-      '<h4>📤 Mandar para o Drive</h4><p class="muted small">Abre o "Compartilhar" do celular: escolha <b>Drive</b> (ou WhatsApp, e-mail). Sem cadastro no Google.</p>' +
-      '<div class="row wrap"><button class="btn small primary" id="pj-drive-proj">📤 Projeto aberto (.zip)</button><button class="btn small" id="pj-drive-bk">📤 Backup de tudo (.json)</button></div>' +
-      '<input type="file" id="pj-rs-in" accept=".json,application/json" hidden>' +
       '<hr><h4>Espaço</h4><p class="muted small" id="pj-space">…</p>' +
       '<p class="muted small">Tudo fica guardado <b>neste navegador</b>, neste aparelho. Para levar para outro lugar: baixe o .zip (⤓ na árvore) ou envie ao GitHub. Limpar os dados do navegador apaga os projetos.</p>' +
       '<hr><h4>Atalhos</h4><p class="muted small">Ctrl+S salvar · Ctrl+B arquivos · Ctrl+Shift+F buscar · Ctrl+J IA · Ctrl+G ir para linha · Ctrl+Enter (na IA) enviar · Alt+P preview maior/menor</p>' +
@@ -142,17 +79,6 @@
     const $ = (s) => SK.$(s, el);
     $('#pj-new').onclick = async () => { const n = await SK.prompt('Nome do projeto novo:', 'Projeto ' + new Date().toLocaleDateString('pt-BR').replace(/\//g, '-'), { okText: 'Criar' }); if (n) { await fs().create(n, starterFiles()); SK.editor.open('index.html'); renderProjects(); } };
     $('#pj-blank').onclick = async () => { const n = await SK.prompt('Nome do projeto vazio:', 'Projeto vazio', { okText: 'Criar' }); if (n) { await fs().create(n, {}); renderProjects(); setTree(true); } };
-    $('#pj-cir').onclick = () => SK.ponte.mandarCirurgiao();
-    $('#pj-cir-end').onclick = () => SK.ponte.endereco(true);
-    $('#pj-bk').onclick = () => backupTudo().catch((er) => SK.toast('Erro no backup: ' + er.message, 'error'));
-    $('#pj-drive-bk').onclick = () => backupTudo(true).catch((er) => SK.toast('Erro no backup: ' + er.message, 'error'));
-    $('#pj-drive-proj').onclick = async () => {
-      if (!fs().project) return SK.toast('Abra um projeto primeiro', 'error');
-      try { await fs().saveNow(); await SK.compartilhar(fs().project.name.replace(/[\\/:*?"<>|]/g, '_') + '.zip', await fs().exportZip(), 'application/zip'); }
-      catch (er) { SK.toast('Erro: ' + er.message, 'error'); }
-    };
-    $('#pj-rs').onclick = () => $('#pj-rs-in').click();
-    $('#pj-rs-in').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await restaurarTudo(f).catch((er) => SK.toast('Backup inválido: ' + er.message, 'error')); };
     $('#pj-zip').onclick = () => $('#pj-zip-in').click();
     $('#pj-zip-in').onchange = async (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -242,8 +168,6 @@
     SK.on('picked-result', () => { if (mobile()) closeSide(); });
     window.addEventListener('beforeunload', () => { fs().saveNow(); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') fs().saveNow(); });
-    window.addEventListener('pagehide', () => { fs().saveNow(); });
-    window.addEventListener('app-pausa', () => { fs().saveNow(); });
 
     // Abre o último projeto (ou cria o de exemplo)
     SK.persistStorage();
